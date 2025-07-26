@@ -1,0 +1,111 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          dart-version: 'stable'
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        id: cache
+        with:
+          path: ~/.dart/cache
+          key: ${{ runner.os }}-dart-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-dart-
+
+      - name: Get dependencies
+        run: dart pub get
+
+      - name: Analyze code
+        run: dart analyze
+
+      - name: Build and test
+        run: |
+          dart test --platform chrome --coverage
+          dart test --platform vm --coverage
+
+      - name: Security scanning and dependency checks
+        run: |
+          dart pub outdated --dependencies-only
+          dart pub audit
+
+      - name: Build and deploy
+        env:
+          DEPLOY_ENV: production
+        run: |
+          # Add deployment script here
+          echo "Deploying to $DEPLOY_ENV environment"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          dart-version: 'stable'
+
+      - name: Run security scan
+        uses: ajakubowska/codeql-action@v2
+        with:
+          languages: dart
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [build-and-test, security-scan]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Send notification
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.PAT }}
+          repository: ${{ github.repository }}
+          event-type: ci-cd-pipeline
+          client-payload: '{"pipeline_status": "success"}'
+
+      - name: Comment on PR
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          token: ${{ secrets.PAT }}
+          repository: ${{ github.repository }}
+          comment-id: $
+          body: "CI/CD pipeline succeeded"
+
+      - name: Send failure notification
+        if: ${{ failure() }}
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.PAT }}
+          repository: ${{ github.repository }}
+          event-type: ci-cd-pipeline
+          client-payload: '{"pipeline_status": "failure"}'
+
+      - name: Comment on PR with failure
+        if: ${{ failure() }}
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          token: ${{ secrets.PAT }}
+          repository: ${{ github.repository }}
+          comment-id: $
+          body: "CI/CD pipeline failed"
